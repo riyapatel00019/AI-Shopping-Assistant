@@ -4,27 +4,14 @@ AI SHOPPING ASSISTANT
 Shopping Agent
 ============================================================
 
-Purpose
--------
-
-Main interface for the AI Shopping Assistant.
-
 Responsibilities
-
-✓ Accept user queries
+----------------
 ✓ Execute Shopping Graph
-✓ Display AI responses
-
-Uses
-
-    • Shopping Graph
-    • LLM Manager
-    • LangChain Tools
-
-Future
-
-    • FastAPI
-    • Streamlit
+✓ Intent-based Routing
+✓ Recommendation
+✓ Comparison
+✓ Bundle Creation
+✓ Return Structured Response
 """
 
 # ============================================================
@@ -33,19 +20,17 @@ Future
 
 import logging
 
-
 # ============================================================
-# IMPORT PROJECT MODULES
+# PROJECT MODULES
 # ============================================================
 
-try:
+from agent.shopping_graph import ShoppingGraph
 
-    from agent.shopping_graph import ShoppingGraph
+from backend.recommendation_engine import RecommendationEngine
 
-except ImportError:
+from backend.comparison_engine import ComparisonEngine
 
-    from shopping_graph import ShoppingGraph
-
+from backend.bundle_engine import BundleEngine
 
 # ============================================================
 # LOGGING
@@ -60,7 +45,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-
 
 # ============================================================
 # SHOPPING AGENT
@@ -84,13 +68,26 @@ class ShoppingAgent:
 
         self.shopping_graph = ShoppingGraph()
 
-        logger.info(
-            "Shopping Graph Loaded Successfully"
-        )
+        # --------------------------------------------
+        # Recommendation Engine
+        # --------------------------------------------
 
-        logger.info("=" * 60)
+        self.recommendation_engine = RecommendationEngine()
+
+        # --------------------------------------------
+        # Comparison Engine
+        # --------------------------------------------
+
+        self.comparison_engine = ComparisonEngine()
+
+        # --------------------------------------------
+        # Bundle Engine
+        # --------------------------------------------
+
+        self.bundle_engine = BundleEngine()
+
         logger.info("Shopping Agent Ready")
-        logger.info("=" * 60)
+
         # ============================================================
     # CHAT
     # ============================================================
@@ -100,7 +97,21 @@ class ShoppingAgent:
         query: str
     ):
         """
-        Process a user query using the Shopping Graph.
+        Process a shopping query.
+
+        Workflow
+
+        User
+            ↓
+        Shopping Graph
+            ↓
+        Query Understanding
+            ↓
+        Intent Routing
+            ↓
+        Recommendation /
+        Comparison /
+        Bundle Engine
         """
 
         logger.info("=" * 60)
@@ -109,41 +120,366 @@ class ShoppingAgent:
 
         logger.info(f"User Query : {query}")
 
-        try:
+        # --------------------------------------------------------
+        # Shopping Graph
+        # --------------------------------------------------------
 
-            result = self.shopping_graph.chat(query)
+        graph_result = self.shopping_graph.chat(query)
 
-            logger.info(
-                "Shopping Graph Executed Successfully"
-            )
+        shopping_context = graph_result["shopping_context"]
 
-            return result
+        intent = graph_result["intent"]
 
-        except Exception as e:
+        # --------------------------------------------------------
+        # If follow-up is required
+        # --------------------------------------------------------
 
-            logger.error(
-                f"Shopping Agent Error : {e}"
-            )
+        if graph_result["follow_up_required"]:
 
-            raise
-        # ============================================================
+            return {
+
+                "messages": graph_result["messages"],
+
+                "shopping_context": shopping_context,
+
+                "conversation_complete": graph_result["conversation_complete"],
+
+                "response": graph_result["follow_up_question"],
+
+                "provider": self.get_provider(),
+
+                "products": [],
+
+                "comparison": None,
+
+                "bundle": None
+
+            }
+
+        # --------------------------------------------------------
+        # Recommendation
+        # --------------------------------------------------------
+
+        if intent == "recommendation":
+
+            logger.info("Routing → Recommendation Engine")
+
+            try:
+
+                products = self.recommendation_engine.recommend(query)
+
+                return {
+
+                    "messages": graph_result["messages"],
+
+                    "shopping_context": shopping_context,
+
+                    "conversation_complete": graph_result["conversation_complete"],
+
+                    "response": f"I found {len(products)} products matching your requirements.",
+
+                    "provider": self.get_provider(),
+
+                    "products": products,
+
+                    "comparison": None,
+
+                    "bundle": None
+
+                }
+
+            except Exception as e:
+
+                logger.error(f"Recommendation Error : {e}")
+
+                return {
+
+                    "messages": graph_result["messages"],
+
+                    "shopping_context": shopping_context,
+
+                    "conversation_complete": False,
+
+                    "response": "Sorry, I couldn't retrieve recommendations at the moment.",
+
+                    "provider": self.get_provider(),
+
+                    "products": [],
+
+                    "comparison": None,
+
+                    "bundle": None
+
+                }
+
+        # --------------------------------------------------------
+        # Comparison
+        # --------------------------------------------------------
+
+        elif intent == "comparison":
+
+            logger.info("Routing → Comparison Engine")
+
+            try:
+
+                comparison = self.comparison_engine.compare(query)
+
+                return {
+
+                    "messages": graph_result["messages"],
+
+                    "shopping_context": shopping_context,
+
+                    "conversation_complete": False,
+
+                    "response": "Sorry, I couldn't compare those products.",
+
+                    "provider": self.get_provider(),
+
+                    "products": [],
+
+                    "comparison": None,
+
+                    "bundle": None
+
+                }
+
+
+            except Exception as e:
+
+                logger.error(f"Comparison Error : {e}")
+
+
+                return {
+
+                    "messages": graph_result["messages"],
+
+                    "shopping_context": shopping_context,
+
+                    "conversation_complete": graph_result["conversation_complete"],
+
+                    "response": "I compared the selected products.",
+
+                    "provider": self.get_provider(),
+
+                    "products": [],
+
+                    "comparison": comparison,
+
+                    "bundle": None
+
+                }
+
+        # --------------------------------------------------------
+        # Bundle
+        # --------------------------------------------------------
+
+        elif intent == "bundle":
+
+            logger.info("Routing → Bundle Engine")
+
+            try:
+
+                bundle = self.bundle_engine.create_bundle(query)
+
+                return {
+
+                    "messages": graph_result["messages"],
+
+                    "shopping_context": shopping_context,
+
+                    "conversation_complete": False,
+
+                    "response": "Sorry, I couldn't create a shopping bundle.",
+
+                    "provider": self.get_provider(),
+
+                    "products": [],
+
+                    "comparison": None,
+
+                    "bundle": None
+
+                }
+
+            except Exception as e:
+
+                logger.error(f"Bundle Error : {e}")
+
+                return {    
+
+                    "messages": graph_result["messages"],
+
+                    "shopping_context": shopping_context,
+
+                    "conversation_complete": graph_result["conversation_complete"],
+
+                    "response": "I created a shopping bundle for you.",
+
+                    "provider": self.get_provider(),
+
+                    "products": [],
+
+                    "comparison": None,
+
+                    "bundle": bundle
+
+                }
+
+        # --------------------------------------------------------
+        # Default
+        # --------------------------------------------------------
+
+        else:
+
+            logger.info("Unknown intent → Recommendation Engine")
+
+            products = self.recommendation_engine.recommend(query)
+
+            return {
+
+                "messages": graph_result["messages"],
+
+                "shopping_context": shopping_context,
+
+                "conversation_complete": graph_result["conversation_complete"],
+
+                "response": f"I found {len(products)} products matching your requirements.",
+
+                "provider": self.get_provider(),
+
+                "products": products,
+
+                "comparison": None,
+
+                "bundle": None
+
+            }
+    # ============================================================
     # GET PROVIDER
     # ============================================================
 
     def get_provider(self):
         """
-        Return the currently active LLM provider.
+        Return the active LLM provider.
         """
 
         return self.shopping_graph.llm_manager.get_provider()
-    
-        # ============================================================
+
+
+    # ============================================================
+    # DISPLAY RESPONSE
+    # ============================================================
+
+    def display_response(
+        self,
+        result
+    ):
+        """
+        Display chatbot response in terminal.
+        Useful for CLI testing.
+        """
+
+        print("\n" + "=" * 70)
+        print("AI SHOPPING ASSISTANT")
+        print("=" * 70)
+
+        print()
+
+        print(result["response"])
+
+        print()
+
+        # --------------------------------------------------------
+        # Recommended Products
+        # --------------------------------------------------------
+
+        products = result.get("products", [])
+
+        if products:
+
+            print("=" * 70)
+            print("RECOMMENDED PRODUCTS")
+            print("=" * 70)
+
+            for i, product in enumerate(products, start=1):
+
+                print(f"\nRank : {i}")
+
+                print(f"Product : {product.product_name}")
+
+                print(f"Brand : {product.brand}")
+
+                print(f"Price : ₹{product.price}")
+
+                print(f"Rating : {product.rating}")
+
+                print(f"Reason : {product.explanation}")
+
+                print("-" * 60)
+
+        # --------------------------------------------------------
+        # Comparison
+        # --------------------------------------------------------
+
+        comparison = result.get("comparison")
+
+        if comparison:
+
+            print("=" * 70)
+            print("PRODUCT COMPARISON")
+            print("=" * 70)
+
+            winner = comparison.get("winner")
+
+            if winner:
+
+                print(
+                    f"\n🏆 Winner : {winner['product_name']}"
+                )
+
+                print(
+                    f"Brand : {winner['brand']}"
+                )
+
+                print(
+                    f"Price : ₹{winner['price']}"
+                )
+
+        # --------------------------------------------------------
+        # Bundle
+        # --------------------------------------------------------
+
+        bundle = result.get("bundle")
+
+        if bundle:
+
+            print("=" * 70)
+            print("SHOPPING BUNDLE")
+            print("=" * 70)
+
+            main = bundle["main_product"]
+
+            print(f"\nMain Product : {main['product_name']}")
+
+            print(f"Price : ₹{main['price']}")
+
+            print("\nBundle Products")
+
+            for item in bundle["bundle_products"]:
+
+                print(f"• {item['product_name']}")
+
+        print("=" * 70)
+
+
+    # ============================================================
     # PROVIDER INFORMATION
     # ============================================================
 
     def provider_info(self):
         """
-        Display the active LLM provider.
+        Display active LLM provider.
         """
 
         print("\n" + "=" * 60)
@@ -159,38 +495,8 @@ class ShoppingAgent:
         )
 
         print("=" * 60)
-        # ============================================================
-    # DISPLAY RESPONSE
+
     # ============================================================
-
-    def display_response(
-        self,
-        result
-    ):
-        """
-        Display the AI response.
-        """
-
-        print("\n" + "=" * 70)
-        print("AI SHOPPING ASSISTANT")
-        print("=" * 70)
-
-        messages = result["messages"]
-
-        for message in reversed(messages):
-
-            if hasattr(message, "content"):
-
-                print()
-
-                print(message.content)
-
-                print()
-
-                break
-
-        print("=" * 70)
-        # ============================================================
     # ASK
     # ============================================================
 
@@ -199,7 +505,9 @@ class ShoppingAgent:
         query: str
     ):
         """
-        Complete chatbot workflow.
+        Complete shopping assistant workflow.
+
+        Used for CLI testing.
         """
 
         result = self.chat(query)
@@ -207,7 +515,8 @@ class ShoppingAgent:
         self.display_response(result)
 
         return result
-    
+
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -221,21 +530,24 @@ if __name__ == "__main__":
     agent = ShoppingAgent()
 
     print("\n" + "=" * 70)
-    print("WELCOME TO AI SHOPPING ASSISTANT")
+    print("🛒 CARTGENIUS AI")
     print("=" * 70)
 
-    print("\nPowered By")
+    print("\nYour Intelligent Shopping Assistant")
 
-    print("• LangGraph")
-    print("• LangChain")
-    print("• Groq")
-    print("• Gemini")
-    print("• Recommendation Engine")
-    print("• Comparison Engine")
-    print("• Bundle Engine")
-    print("• Semantic Search")
-    print("• FAISS")
+    print("\nCapabilities")
+
+    print("• Product Recommendation")
+
+    print("• Product Comparison")
+
+    print("• Shopping Bundles")
+
+    print("• Budget Shopping")
+
     print("• Conversation Memory")
+
+    print("• Intent Detection")
 
     print()
 
@@ -249,7 +561,7 @@ if __name__ == "__main__":
 
         if query.lower() == "exit":
 
-            print("\nThank you for using AI Shopping Assistant!")
+            print("\nThank you for using CartGenius AI!")
 
             break
 
@@ -266,12 +578,12 @@ if __name__ == "__main__":
         except Exception as e:
 
             logger.error(
+
                 f"Shopping Agent Error : {e}"
+
             )
 
-            print(
-                "\nSorry, something went wrong."
-            )
+            print("\nSomething went wrong.")
 
     logger.info("=" * 60)
     logger.info("SHOPPING AGENT CLOSED")

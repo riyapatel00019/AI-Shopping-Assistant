@@ -1,32 +1,24 @@
 """
 ============================================================
 AI SHOPPING ASSISTANT
-LangGraph Shopping Workflow
+Shopping Graph
 ============================================================
 
-Purpose
--------
-
-Central workflow powered by LangGraph.
-
 Responsibilities
+----------------
+✓ Conversation Memory
+✓ Query Understanding
+✓ Follow-up Questions
+✓ Intent Detection
 
-✓ Maintain conversation state
-✓ Invoke the LLM
-✓ Execute LangChain tools
-✓ Route tool calls
-✓ Return final response
+This graph DOES NOT perform recommendations.
 
-Uses
+RecommendationEngine,
+ComparisonEngine and BundleEngine
+are called later by ShoppingAgent.
 
-    • LangGraph
-    • LLM Manager
-    • LangChain Tools
-
-Future
-
-    • FastAPI
-    • Streamlit
+This graph is responsible only for
+understanding the user's shopping request.
 """
 
 # ============================================================
@@ -34,37 +26,24 @@ Future
 # ============================================================
 
 import logging
-import time
-from typing import TypedDict, Annotated
 
-from langgraph.graph import StateGraph, END
-
-from langgraph.graph.message import add_messages
+from typing import TypedDict
+from typing import List
+from typing import Optional
 
 from langchain_core.messages import (
     HumanMessage,
     AIMessage,
-    BaseMessage
+    BaseMessage,
 )
-
-from langgraph.prebuilt import ToolNode
-
 
 # ============================================================
 # IMPORT PROJECT MODULES
 # ============================================================
 
-try:
+from agent.llm_manager import LLMManager
 
-    from agent.llm_manager import LLMManager
-
-    from agent.tools import get_tools
-
-except ImportError:
-
-    from llm_manager import LLMManager
-
-    from tools import get_tools
+from backend.query_understanding_engine import QueryUnderstandingEngine
 
 
 # ============================================================
@@ -83,18 +62,22 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# GRAPH STATE
+# SHOPPING STATE
 # ============================================================
 
 class ShoppingState(TypedDict):
-    """
-    LangGraph state.
-    """
 
-    messages: Annotated[
-        list[BaseMessage],
-        add_messages
-    ]
+    messages: List[BaseMessage]
+
+    query: str
+
+    shopping_context: dict
+
+    intent: Optional[str]
+
+    follow_up_required: bool
+
+    follow_up_question: Optional[str]
 
 
 # ============================================================
@@ -104,7 +87,15 @@ class ShoppingState(TypedDict):
 class ShoppingGraph:
 
     """
-    AI Shopping Workflow using LangGraph.
+    Handles
+
+    ✓ Query Understanding
+
+    ✓ Conversation Memory
+
+    ✓ Follow-up Questions
+
+    ✓ Intent Detection
     """
 
     def __init__(self):
@@ -113,283 +104,33 @@ class ShoppingGraph:
         logger.info("Initializing Shopping Graph")
         logger.info("=" * 60)
 
-        # --------------------------------------------
-        # LLM Manager
-        # --------------------------------------------
+        # ----------------------------------------
+        # LLM
+        # ----------------------------------------
 
         self.llm_manager = LLMManager()
 
-        self.llm = self.llm_manager.get_llm()
+        # Get the active LLM
+        llm = self.llm_manager.get_llm()
 
-        logger.info(
-            f"Using Provider : {self.llm_manager.get_provider()}"
-        )
+        # ----------------------------------------
+        # Query Understanding
+        # ----------------------------------------
 
-        # --------------------------------------------
-        # LangChain Tools
-        # --------------------------------------------
+        self.query_engine = QueryUnderstandingEngine(llm)
 
-        self.tools = get_tools()
+        # ----------------------------------------
+        # Conversation Memory
+        # ----------------------------------------
 
-        logger.info(
-            f"Loaded {len(self.tools)} Tools"
-        )
+        self.messages = []
 
-        # --------------------------------------------
-        # Bind Tools to LLM
-        # --------------------------------------------
+        self.shopping_context = {}
 
-        self.llm_with_tools = self.llm.bind_tools(
-            self.tools
-        )
-        # Compile graph once
-        self.graph = self.build_graph()
 
-        logger.info(
-            "LLM Successfully Bound With Tools"
-        )
-        # ============================================================
-    # CHATBOT NODE
-    # ============================================================
-
-    def chatbot_node(
-        self,
-        state: ShoppingState
-    ):
-        """
-        Main LLM node.
-
-        The LLM receives the conversation and
-        decides whether to answer directly
-        or call a tool.
-        """
-
-        logger.info("=" * 60)
-        logger.info("CHATBOT NODE")
-        logger.info("=" * 60)
-
-        # Keep only the most recent messages
-        # to avoid large prompts and repeated context.
-        messages = state["messages"][-3:]
-
+        logger.info("Shopping Graph Ready")
     
-
-        # Safety check to prevent endless tool-call loops
-        tool_message_count = sum(
-            1 for msg in messages
-            if msg.__class__.__name__ == "ToolMessage"
-        )
-
-        if tool_message_count >= 1:
-            logger.warning("Too many tool calls detected. Stopping further tool execution.")
-
-            return {
-                "messages": [
-                    AIMessage(
-                        content="I have gathered the required information and cannot perform additional tool calls for this request."
-                    )
-                ]
-            }
-
-        logger.info(
-            f"Messages Received : {len(messages)}"
-        )
-
-
-        logger.info("=" * 60)
-
-        for i, msg in enumerate(messages):
-
-            logger.info(f"Message {i+1}: {type(msg).__name__}")
-
-            if hasattr(msg, "content"):
-
-                logger.info(f"Length : {len(str(msg.content))}")
-
-                # Print only the first 100 characters
-                # logger.info(str(msg.content)[:100])
-
-        logger.info("=" * 60)
-        response = self.llm_with_tools.invoke(
-            messages
-        )
-
-        logger.info("LLM Response Generated")
-
-        return {
-
-            "messages": [response]
-
-        }
-        # ============================================================
-    # ROUTER
     # ============================================================
-
-    def should_continue(
-        self,
-        state: ShoppingState
-    ):
-        """
-        Decide whether to continue calling tools.
-        """
-
-        logger.info("=" * 60)
-        logger.info("ROUTER")
-        logger.info("=" * 60)
-
-        messages = state["messages"]
-
-        # -----------------------------
-        # Prevent infinite tool loops
-        # -----------------------------
-        tool_count = sum(
-            1
-            for message in messages
-            if message.__class__.__name__ == "ToolMessage"
-        )
-
-        logger.info(f"Tool Calls So Far : {tool_count}")
-
-        if tool_count >= 1:
-
-            logger.info("Maximum Tool Calls Reached")
-
-            return END
-
-        last_message = messages[-1]
-
-        if hasattr(last_message, "tool_calls"):
-
-            if last_message.tool_calls:
-
-                logger.info("Tool Call Detected")
-
-                return "tools"
-
-        logger.info("Returning Final Response")
-
-        return END
-    
-        # ============================================================
-    # TOOL NODE
-    # ============================================================
-
-    def build_tool_node(self):
-        """
-        Create LangGraph ToolNode.
-        """
-
-        logger.info("=" * 60)
-        logger.info("Creating Tool Node")
-        logger.info("=" * 60)
-
-        return ToolNode(self.tools)
-        # ============================================================
-    # BUILD GRAPH
-    # ============================================================
-
-    def build_graph(self):
-        """
-        Build the LangGraph workflow.
-        """
-
-        logger.info("=" * 60)
-        logger.info("BUILDING LANGGRAPH")
-        logger.info("=" * 60)
-
-        # --------------------------------------------
-        # Create Graph
-        # --------------------------------------------
-
-        graph = StateGraph(ShoppingState)
-
-        # --------------------------------------------
-        # Create Tool Node
-        # --------------------------------------------
-
-        tool_node = self.build_tool_node()
-
-        # --------------------------------------------
-        # Add Nodes
-        # --------------------------------------------
-
-        graph.add_node(
-
-            "chatbot",
-
-            self.chatbot_node
-
-        )
-
-        graph.add_node(
-
-            "tools",
-
-            tool_node
-
-        )
-
-        logger.info("Nodes Added Successfully")
-            # --------------------------------------------
-        # Entry Point
-        # --------------------------------------------
-
-        graph.set_entry_point(
-
-            "chatbot"
-
-        )
-
-        logger.info("Entry Point Set")
-            # --------------------------------------------
-        # Conditional Routing
-        # --------------------------------------------
-
-        graph.add_conditional_edges(
-
-            "chatbot",
-
-            self.should_continue
-
-        )
-
-        logger.info("Conditional Edge Added")
-            # --------------------------------------------
-        # Tool → Chatbot
-        # --------------------------------------------
-
-        graph.add_edge(
-
-            "tools",
-
-            "chatbot"
-
-        )
-
-        logger.info("Tool Edge Added")
-            # --------------------------------------------
-        # Compile Graph
-        # --------------------------------------------
-
-        self.graph = graph.compile()
-
-        logger.info("=" * 60)
-        logger.info("LANGGRAPH COMPILED SUCCESSFULLY")
-        logger.info("=" * 60)
-
-        return self.graph
-    
-        # ============================================================
-    # GET GRAPH
-    # ============================================================
-
-    def get_graph(self):
-        """
-        Return the compiled LangGraph workflow.
-        """
-        return self.graph
-    
-        # ============================================================
     # CHAT
     # ============================================================
 
@@ -398,89 +139,379 @@ class ShoppingGraph:
         query: str
     ):
         """
-        Execute the LangGraph workflow.
+        Process a shopping query.
+
+        This graph is responsible only for:
+
+        ✓ Query understanding
+        ✓ Intent detection
+        ✓ Conversation memory
+        ✓ Follow-up questions
+
+        It DOES NOT perform recommendations.
         """
 
         logger.info("=" * 60)
         logger.info("SHOPPING GRAPH STARTED")
         logger.info("=" * 60)
-        start = time.time()
-        graph = self.get_graph()
 
-        state = {
+        logger.info(f"User Query : {query}")
 
-            "messages": [
+        # --------------------------------------------------------
+        # Store User Message
+        # --------------------------------------------------------
 
-                HumanMessage(content=query)
+        MAX_HISTORY = 20
 
-            ]
-
-        }
-
-        result = graph.invoke(state)
-
-        end = time.time()
-
-        logger.info(
-            f"Execution Time : {end-start:.2f} sec"
+        self.messages.append(
+            HumanMessage(content=query)
         )
 
-        logger.info("Graph Execution Completed")
+        if len(self.messages) > MAX_HISTORY:
 
-        return result
-        # ============================================================
-    # DISPLAY RESPONSE
+            self.messages = self.messages[-MAX_HISTORY:]
+
+        # --------------------------------------------------------
+        # Understand Query
+        # --------------------------------------------------------
+
+        shopping_context = self.query_engine.understand(query)
+
+        # --------------------------------------------------------
+        # Merge Previous Shopping Context
+        # --------------------------------------------------------
+
+        for key, value in self.shopping_context.items():
+
+            if shopping_context.get(key) in (None, "", []):
+
+                shopping_context[key] = value
+
+        # --------------------------------------------------------
+        # Normalize Category
+        # --------------------------------------------------------
+
+        category = shopping_context.get("category")
+
+        if category:
+
+            shopping_context["category"] = (
+                category
+                .lower()
+                .rstrip("s")
+            )
+
+        # Save normalized shopping context
+        self.shopping_context = shopping_context
+
+        logger.info("Shopping Context Generated")
+
+        intent = shopping_context.get(
+            "intent",
+            "recommendation"
+        )
+
+        logger.info(f"Intent : {intent}")
+
+        # --------------------------------------------------------
+        # Missing Information Detection
+        # --------------------------------------------------------
+
+        follow_up_required = False
+
+        follow_up_question = None
+
+        missing_fields = []
+
+        # --------------------------------------------------------
+        # Recommendation
+        # --------------------------------------------------------
+
+        if intent == "recommendation":
+
+            if shopping_context.get("category") is None:
+
+                missing_fields.append("product category")
+
+            if shopping_context.get("budget") is None:
+
+                missing_fields.append("budget")
+
+        # --------------------------------------------------------
+        # Comparison
+        # --------------------------------------------------------
+
+        elif intent == "comparison":
+
+            if len(
+                shopping_context.get(
+                    "product_names",
+                    []
+                )
+            ) < 2:
+
+                missing_fields.append("second product")
+
+        # --------------------------------------------------------
+        # Bundle
+        # --------------------------------------------------------
+
+        elif intent == "bundle":
+
+            if shopping_context.get("bundle_type") is None:
+
+                missing_fields.append("bundle type")
+
+        # --------------------------------------------------------
+        # Generate Follow-up Question
+        # --------------------------------------------------------
+
+        if missing_fields:
+
+            follow_up_required = True
+
+            prompt = f"""
+            You are an experienced e-commerce sales associate.
+
+            Shopping Context:
+
+            {shopping_context}
+
+            Detected Intent:
+
+            {intent}
+
+            Missing Information:
+
+            {', '.join(missing_fields)}
+
+            Ask ONE friendly follow-up question.
+
+            Don't ask for information that is already known.
+
+            Return ONLY the question.
+            """
+
+            follow_up_question = self.llm_manager.invoke(
+                prompt
+            ).content.strip()
+
+            self.messages.append(
+
+                AIMessage(
+                    content=follow_up_question
+                )
+
+            )
+
+        logger.info("=" * 60)
+        logger.info("SHOPPING GRAPH COMPLETED")
+        logger.info("=" * 60)
+
+        return {
+
+            "messages": self.messages,
+
+            "query": query,
+
+            "shopping_context": shopping_context,
+
+            "intent": intent,
+
+            "follow_up_required": follow_up_required,
+
+            "follow_up_question": follow_up_question,
+
+            "conversation_complete": not follow_up_required
+
+        }
+    # ============================================================
+    # ADD USER MESSAGE
     # ============================================================
 
-    def display_response(
+    def add_user_message(
         self,
-        result
+        message: str
     ):
         """
-        Display final AI response.
+        Store a user message in conversation memory.
         """
 
-        print("\n" + "=" * 70)
-        print("AI SHOPPING ASSISTANT")
-        print("=" * 70)
+        self.messages.append(
+            HumanMessage(
+                content=message
+            )
+        )
 
-        messages = result["messages"]
 
-        for message in reversed(messages):
+    # ============================================================
+    # ADD AI MESSAGE
+    # ============================================================
+
+    def add_ai_message(
+        self,
+        message: str
+    ):
+        """
+        Store an AI response in conversation memory.
+        """
+
+        self.messages.append(
+            AIMessage(
+                content=message
+            )
+        )
+
+
+    # ============================================================
+    # GET CHAT HISTORY
+    # ============================================================
+
+    def get_chat_history(self):
+        """
+        Return conversation history.
+        """
+
+        return self.messages
+
+
+    # ============================================================
+    # GET LAST USER MESSAGE
+    # ============================================================
+
+    def get_last_user_message(self):
+
+        """
+        Return the latest user message.
+        """
+
+        for message in reversed(self.messages):
+
+            if isinstance(message, HumanMessage):
+
+                return message.content
+
+        return None
+
+
+    # ============================================================
+    # GET LAST AI MESSAGE
+    # ============================================================
+
+    def get_last_ai_message(self):
+
+        """
+        Return the latest assistant message.
+        """
+
+        for message in reversed(self.messages):
 
             if isinstance(message, AIMessage):
 
-                print(message.content)
+                return message.content
 
-                break
+        return None
+
+
+    # ============================================================
+    # CLEAR MEMORY
+    # ============================================================
+
+    def clear_memory(self):
+
+        """
+        Reset the conversation.
+        """
+
+        logger.info("=" * 60)
+        logger.info("Conversation Memory Cleared")
+        logger.info("=" * 60)
+
+        self.messages = []
+        self.shopping_context = {}
+
+
+    # ============================================================
+    # MEMORY SIZE
+    # ============================================================
+
+    def conversation_length(self):
+
+        """
+        Number of stored messages.
+        """
+
+        return len(self.messages)
+
+
+    # ============================================================
+    # DISPLAY MEMORY
+    # ============================================================
+
+    def display_memory(self):
+
+        """
+        Print conversation history.
+        """
+
+        print("\n" + "=" * 70)
+        print("CONVERSATION MEMORY")
+        print("=" * 70)
+
+        for message in self.messages:
+
+            role = "User"
+
+            if isinstance(message, AIMessage):
+
+                role = "Assistant"
+
+            print(f"\n{role}")
+
+            print("-" * 40)
+
+            print(message.content)
 
         print("=" * 70)
+
+        # ============================================================
+    # GRAPH INFORMATION
     # ============================================================
+
+    def graph_info(self):
+        """
+        Display graph information.
+        """
+
+        print("\n" + "=" * 70)
+        print("SHOPPING GRAPH INFORMATION")
+        print("=" * 70)
+
+        print(f"Conversation Messages : {len(self.messages)}")
+
+        print(
+            f"LLM Provider : {self.llm_manager.get_provider()}"
+        )
+
+        print("=" * 70)
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
 if __name__ == "__main__":
 
     logger.info("=" * 60)
-    logger.info("SHOPPING GRAPH TEST")
+    logger.info("SHOPPING GRAPH TEST STARTED")
     logger.info("=" * 60)
 
-    shopping_graph = ShoppingGraph()
-
-    # shopping_graph.build_graph()
+    graph = ShoppingGraph()
 
     print("\n" + "=" * 70)
-    print("WELCOME TO AI SHOPPING ASSISTANT")
+    print("AI SHOPPING ASSISTANT")
+    print("Shopping Graph Testing")
     print("=" * 70)
-
-    print("\nPowered By")
-    print("• LangGraph")
-    print("• LangChain")
-    print("• Groq")
-    print("• Gemini")
-    print("• Recommendation Engine")
-    print("• Comparison Engine")
-    print("• Bundle Engine")
 
     print("\nType 'exit' to quit.\n")
 
@@ -494,16 +525,46 @@ if __name__ == "__main__":
 
             break
 
-        if query == "":
+        if not query:
+
+            print("Please enter a query.\n")
 
             continue
 
         try:
 
-            result = shopping_graph.chat(query)
+            result = graph.chat(query)
 
-            shopping_graph.display_response(result)
+            print("\n" + "=" * 70)
+            print("SHOPPING CONTEXT")
+            print("=" * 70)
+
+            context = result["shopping_context"]
+
+            for key, value in context.items():
+
+                print(f"{key:20}: {value}")
+
+            print("=" * 70)
+
+            if result["follow_up_required"]:
+
+                print("\nFollow-up Question:\n")
+
+                print(result["follow_up_question"])
+
+            else:
+
+                print("\nNo follow-up question required.")
+
+            print("=" * 70)
 
         except Exception as e:
 
-            logger.error(f"Graph Error : {e}")
+            logger.error(f"Shopping Graph Error : {e}")
+
+            print("\nError:", e)
+
+    logger.info("=" * 60)
+    logger.info("SHOPPING GRAPH TEST COMPLETED")
+    logger.info("=" * 60)

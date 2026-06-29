@@ -96,7 +96,7 @@ class BundleEngine:
         logging.info("Loading Products Dataset")
 
         self.products = pd.read_csv(
-            "data/products.csv"
+            "data/shopping_products.csv"
         )
 
         logging.info(

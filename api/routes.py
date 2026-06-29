@@ -5,18 +5,39 @@ FastAPI Routes
 ============================================================
 """
 
-from fastapi import APIRouter, HTTPException
+# ============================================================
+# IMPORTS
+# ============================================================
 
-from api.schemas import ChatRequest, ChatResponse
+import logging
 
-try:
+from fastapi import APIRouter
+from fastapi import HTTPException
 
-    from agent.shopping_agent import ShoppingAgent
+from api.schemas import ChatRequest
+from api.schemas import ChatResponse
 
-except ImportError:
+from agent.shopping_agent import ShoppingAgent
 
-    from shopping_agent import ShoppingAgent
 
+# ============================================================
+# LOGGING
+# ============================================================
+
+logging.basicConfig(
+
+    level=logging.INFO,
+
+    format="%(asctime)s | %(levelname)s | %(message)s"
+
+)
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# ROUTER
+# ============================================================
 
 router = APIRouter()
 
@@ -27,37 +48,69 @@ agent = ShoppingAgent()
 # CHAT
 # ============================================================
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post(
 
-def chat(request: ChatRequest):
+    "/chat",
+
+    response_model=ChatResponse
+
+)
+
+def chat(
+
+    request: ChatRequest
+
+):
+
+    """
+    Main Shopping Chat Endpoint.
+    """
+
+    logger.info("=" * 60)
+
+    logger.info("CHAT REQUEST RECEIVED")
+
+    logger.info("=" * 60)
+
+    logger.info(f"Query : {request.query}")
 
     try:
 
-        result = agent.chat(request.query)
+        result = agent.chat(
 
-        messages = result["messages"]
+            request.query
 
-        answer = ""
+        )
 
-        for message in reversed(messages):
-
-            if hasattr(message, "content"):
-
-                answer = message.content
-
-                break
+        logger.info("Shopping Agent Completed Successfully")
 
         return ChatResponse(
 
-            response=answer,
+            response=result["response"],
 
-            provider=agent.get_provider(),
+            provider=result["provider"],
 
-            success=True
+            success=True,
+
+            conversation_complete=result["conversation_complete"],
+
+            shopping_context=result["shopping_context"],
+
+            products=result["products"],
+
+            comparison=result["comparison"],
+
+            bundle=result["bundle"]
 
         )
 
     except Exception as e:
+
+        logger.exception(
+
+            "Chat Endpoint Error"
+
+        )
 
         raise HTTPException(
 
@@ -66,3 +119,49 @@ def chat(request: ChatRequest):
             detail=str(e)
 
         )
+
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+
+@router.get("/health")
+
+def health():
+
+    """
+    API Health Check
+    """
+
+    return {
+
+        "status": "healthy",
+
+        "service": "AI Shopping Assistant",
+
+        "provider": agent.get_provider()
+
+    }
+
+
+# ============================================================
+# ROOT
+# ============================================================
+
+@router.get("/")
+
+def root():
+
+    """
+    Root Endpoint
+    """
+
+    return {
+
+        "message": "AI Shopping Assistant API",
+
+        "provider": agent.get_provider(),
+
+        "status": "running"
+
+    }

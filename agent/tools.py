@@ -91,10 +91,12 @@ def recommendation_tool(query: str):
     Recommend products based on the user's query.
     """
 
-    products = recommendation_engine.recommend(query)
+    result = recommendation_engine.recommend(query)
+
+    products = result["products"]
 
     if not products:
-        return "No products found."
+        return "No suitable products found."
 
     result = []
 
@@ -102,10 +104,26 @@ def recommendation_tool(query: str):
 
         result.append(
             f"""
-{i}. {p['product_name']}
-Brand : {p['brand']}
-Price : ₹{p['price']}
-Rating : {p['rating']}
+📦 Product #{i}
+
+Name : {p.product_name}
+
+Brand : {p.brand}
+
+Price : ₹{p.price}
+
+Rating : ⭐ {p.rating}
+
+Why Recommended :
+{p.explanation}
+
+🖼 Image URL
+
+{p.image_url}
+
+🔗 Product URL
+
+{p.product_url}
 """
         )
 
@@ -127,18 +145,7 @@ def comparison_tool(query: str):
     if comparison is None:
         return "Unable to compare products."
 
-    winner = comparison.get("winner")
-
-    if winner is None:
-        return "No winner found."
-
-    return f"""
-Best Product : {winner['product_name']}
-Brand : {winner['brand']}
-Price : ₹{winner['price']}
-Rating : {winner['rating']}
-Comparison Score : {winner['comparison_score']}
-"""
+    return comparison
 
 
 # ============================================================
@@ -159,21 +166,29 @@ def bundle_tool(query: str):
     main = bundle["main_product"]
 
     text = f"""
-Main Product:
-{main['product_name']}
+🏋 RECOMMENDED SHOPPING BUNDLE
 
-Brand : {main['brand']}
-Price : ₹{main['price']}
+🎯 Main Product
 
-Recommended Bundle:
+📦 {main['product_name']}
+
+🏷 Brand : {main['brand']}
+
+💰 Price : ₹{main['price']}
+
+----------------------------------------
 """
 
-    for p in bundle["bundle_products"][:3]:
+    for p in bundle["bundle_products"]:
 
         text += f"""
+📦 {p['product_name']}
 
-• {p['product_name']}
-  ₹{p['price']}
+🏷 Brand : {p['brand']}
+
+💰 Price : ₹{p['price']}
+
+----------------------------------------
 """
 
     return text

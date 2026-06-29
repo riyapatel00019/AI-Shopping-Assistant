@@ -27,28 +27,20 @@ Used By
 """
 
 import logging
-import pandas as pd
+
 
 
 # ============================================================
 # IMPORT PROJECT MODULES
 # ============================================================
 
-try:
+from backend.semantic_search import SemanticSearchEngine
+from backend.query_understanding_engine import QueryUnderstandingEngine
+from backend.ranking_engine import ContextAwareRankingEngine
+from backend.conversation_memory import ConversationMemory
+from agent.llm_manager import LLMManager
 
-    from backend.semantic_search import SemanticSearchEngine
-
-    from backend.query_parser import QueryParser
-
-    from backend.conversation_memory import ConversationMemory
-
-except ImportError:
-
-    from semantic_search import SemanticSearchEngine
-
-    from query_parser import QueryParser
-
-    from conversation_memory import ConversationMemory
+    
 
 
 # ============================================================
@@ -84,23 +76,23 @@ class RecommendationEngine:
         # Load Modules
         # --------------------------------------------
 
-        self.parser = QueryParser()
+        # LLM
+        self.llm = LLMManager().get_llm()
 
+        # Query Understanding
+        self.query_engine = QueryUnderstandingEngine(
+            self.llm
+        )
+
+        # Conversation Memory
         self.memory = ConversationMemory()
 
+        # Semantic Search
         self.semantic_search = SemanticSearchEngine()
 
-        # --------------------------------------------
-        # Load Dataset
-        # --------------------------------------------
+        # Context Ranking
+        self.ranking_engine = ContextAwareRankingEngine()
 
-        logging.info("Loading Products Dataset")
-
-        self.products = pd.read_csv("data/products.csv")
-
-        logging.info(
-            f"Products Loaded : {len(self.products)}"
-        )
 
         logging.info("Recommendation Engine Ready")
     
@@ -115,19 +107,18 @@ class RecommendationEngine:
         Current query has higher priority than memory.
         """
 
-        parsed = self.parser.parse_query(query)
+        shopping_context = self.query_engine.understand(
+            query
+        )
 
-        self.memory.update_memory(parsed)
+        self.memory.update_memory(
+            shopping_context
+        )
 
         context = self.memory.build_context()
 
-        logging.info("=" * 60)
-        logging.info("Current User Context")
-        logging.info("=" * 60)
-
-        logging.info(context)
-
         return context
+
 
 
     # ============================================================
@@ -195,9 +186,14 @@ class RecommendationEngine:
 
             if context.get("brand"):
 
-                if str(product["brand"]).lower() != \
-                   str(context["brand"]).lower():
+                brands = context["brand"]
 
+                if isinstance(brands, str):
+                    brands = [brands]
+
+                brands = [b.lower() for b in brands]
+
+                if str(product["brand"]).lower() not in brands:
                     continue
 
             # ----------------------------
@@ -237,7 +233,7 @@ class RecommendationEngine:
     # GENERATE RECOMMENDATIONS
     # ============================================================
 
-    def recommend(self, query, top_k=10):
+    def recommend(self, query, top_k=5):
 
         """
         Main Recommendation Pipeline
@@ -253,7 +249,7 @@ class RecommendationEngine:
         # Step 2
         candidates = self.retrieve_candidates(
             query,
-            top_k=50
+            top_k=30
         )
 
         # Step 3
@@ -265,87 +261,26 @@ class RecommendationEngine:
         if len(filtered) == 0:
 
             logging.warning(
-                "No Products After Filtering."
+                "No products after filtering. Using semantic candidates."
             )
 
-            logging.info(
-                "Returning Semantic Search Results."
-            )
+            filtered = candidates[:10]
 
-            ranked = self.rank_products(candidates)
 
-            return ranked[:top_k]
-        # --------------------------------------------
-        # Rank Filtered Products
-        # --------------------------------------------
+        ranked = self.ranking_engine.rank_products(
 
-        ranked = self.rank_products(filtered)
+            query=query,
 
-        return ranked[:top_k]
-    # ============================================================
-    # RANK PRODUCTS
-    # ============================================================
+            products=filtered,
 
-    def rank_products(self, products):
+            shopping_context=context,
 
-        """
-        Rank products using similarity, rating and price.
-        """
-
-        logging.info("=" * 60)
-        logging.info("Ranking Products")
-        logging.info("=" * 60)
-
-        if len(products) == 0:
-
-            return []
-
-        for product in products:
-
-            similarity = float(
-                product.get("similarity_score", 0)
-            )
-
-            rating = float(
-                product.get("rating", 0)
-            ) / 5
-
-            price_bonus = 0
-
-            if product.get("price", 0) > 0:
-
-                price_bonus = 1 / product["price"]
-
-            score = (
-
-                similarity * 0.70 +
-
-                rating * 0.25 +
-
-                price_bonus * 0.05
-
-            )
-
-            product["final_score"] = score
-
-        products = sorted(
-
-            products,
-
-            key=lambda x: x["final_score"],
-
-            reverse=True
+            top_k=top_k
 
         )
 
-        logging.info(
-
-            f"Ranked Products : {len(products)}"
-
-        )
-
-        return products
-
+        return ranked
+        
 
     # ============================================================
     # DISPLAY RECOMMENDATIONS
@@ -354,57 +289,62 @@ class RecommendationEngine:
     def display_recommendations(self, products):
 
         """
-        Display recommended products.
+        Display Beautiful Recommendations
         """
 
         if len(products) == 0:
 
-            print("\nNo Products Found.\n")
+            print("\n❌ No Products Found.\n")
 
             return
 
-        print("\n" + "=" * 70)
-        print("RECOMMENDED PRODUCTS")
-        print("=" * 70)
+        print("\n")
+        print("=" * 90)
+        print("🛍 AI SHOPPING ASSISTANT RECOMMENDATIONS")
+        print("=" * 90)
 
         for index, product in enumerate(products, start=1):
 
-            print(f"\nRank : {index}")
+            print(f"\n🏆 Recommendation #{index}")
+            print("-" * 90)
 
-            print(f"Product : {product['product_name']}")
+            print(f"📦 Product        : {product.product_name}")
 
-            print(f"Brand : {product['brand']}")
+            print(f"🏷 Brand          : {product.brand}")
 
-            print(
-                f"Main Category : "
-                f"{product.get('main_category', 'N/A')}"
-            )
+            print(f"📂 Category       : {product.category}")
 
-            print(
-                f"Sub Category  : "
-                f"{product.get('sub_category', 'N/A')}")
+            print(f"📁 Sub Category   : {product.sub_category}")
+
+            print(f"💰 Price          : ₹{product.price:,.0f}")
+
+            print(f"⭐ Rating         : {product.rating}/5")
+
+            print(f"🎯 Match Score    : {product.final_score:.3f}")
+
+            print()
+
+            print("✅ Why Recommended")
+
+            print(f"   {product.explanation}")
+
+            print()
+
+            print(f"🖼 Image URL")
+
+            print(product.image_url)
+
+            print()
+
+            print("🔗 Product URL")
+
+            print(product.product_url)
+
+            print()
+
+            print("=" * 90)
+
             
-            print(f"Price : ₹{product['price']}")
-
-            print(f"Rating : {product['rating']}")
-
-            print(
-
-                f"Similarity : "
-
-                f"{product.get('similarity_score',0):.4f}"
-
-            )
-
-            print(
-
-                f"Final Score : "
-
-                f"{product['final_score']:.4f}"
-
-            )
-
-            print("-" * 70)
 
 # ============================================================
 # MAIN

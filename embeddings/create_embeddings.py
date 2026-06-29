@@ -8,7 +8,7 @@ This script generates semantic embeddings for products
 using Sentence Transformers.
 
 Input:
-    data/products.csv
+    data/shopping_products.csv
 
 Output:
     embeddings/embeddings.npy
@@ -37,7 +37,7 @@ warnings.filterwarnings("ignore")
 # CONFIGURATION
 # ============================================================
 
-INPUT_FILE = "data/products.csv"
+INPUT_FILE = "data/shopping_products.csv"
 
 OUTPUT_EMBEDDINGS = "embeddings/embeddings.npy"
 
@@ -146,15 +146,38 @@ def prepare_search_text(df):
     logger.info("Preparing Search Text")
     logger.info("=" * 60)
 
-    texts = (
-        df["search_text"]
-        .fillna("")
-        .astype(str)
-        .tolist()
-    )
+    texts = []
+
+    for _, row in df.iterrows():
+
+        text = f"""
+Product Name: {row.get("product_name", "")}
+
+Brand: {row.get("brand", "")}
+
+Main Category: {row.get("main_category", "")}
+
+Sub Category: {row.get("sub_category", "")}
+
+Description: {row.get("description", "")}
+
+Search Keywords: {row.get("search_text", "")}
+
+RAM: {row.get("ram", "")}
+
+Storage: {row.get("storage", "")}
+
+Battery: {row.get("battery", "")}
+
+Processor: {row.get("processor", "")}
+
+Display: {row.get("display", "")}
+"""
+
+        texts.append(text)
 
     logger.info(
-        f"Total Texts : {len(texts)}"
+        f"Prepared {len(texts)} search texts"
     )
 
     return texts
