@@ -1,18 +1,25 @@
 """
 ============================================================
 AI SHOPPING ASSISTANT
-Embedding Generation Pipeline
+Production Embedding Generation Pipeline
 ============================================================
 
-This script generates semantic embeddings for products
-using Sentence Transformers.
+This script performs:
 
-Input:
-    data/shopping_products.csv
+1. Load shopping dataset
+2. Validate dataset
+3. Clean dataset
+4. Generate rich search text
+5. Generate embeddings
+6. Normalize embeddings
+7. Create FAISS Index
+8. Save Embeddings (.npy)
+9. Save FAISS Index (.index)
+10. Save Product Mapping (.pkl)
+11. Save Metadata (.json)
 
-Output:
-    embeddings/embeddings.npy
-    embeddings/product_mapping.pkl
+Author : Riya Patel
+============================================================
 """
 
 # ============================================================
@@ -20,15 +27,17 @@ Output:
 # ============================================================
 
 import os
+import json
+import time
+import pickle
 import logging
 import warnings
-import pickle
 
+import faiss
 import numpy as np
 import pandas as pd
 
 from tqdm import tqdm
-
 from sentence_transformers import SentenceTransformer
 
 warnings.filterwarnings("ignore")
@@ -37,36 +46,82 @@ warnings.filterwarnings("ignore")
 # CONFIGURATION
 # ============================================================
 
-INPUT_FILE = "data/shopping_products.csv"
+# Dataset Path
+DATASET_PATH = "data/shopping_products.csv"
 
-OUTPUT_EMBEDDINGS = "embeddings/embeddings.npy"
+# Output Directory
+OUTPUT_DIR = "embeddings"
 
-OUTPUT_MAPPING = "embeddings/product_mapping.pkl"
+# Create Output Directory
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Output Files
+EMBEDDINGS_FILE = os.path.join(
+    OUTPUT_DIR,
+    "embeddings.npy"
+)
+
+FAISS_INDEX_FILE = os.path.join(
+    OUTPUT_DIR,
+    "faiss.index"
+)
+
+PRODUCT_MAPPING_FILE = os.path.join(
+    OUTPUT_DIR,
+    "product_mapping.pkl"
+)
+
+METADATA_FILE = os.path.join(
+    OUTPUT_DIR,
+    "embedding_metadata.json"
+)
+
+# Embedding Model
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
+# Batch Size
 BATCH_SIZE = 64
 
+# Embedding Dimension
+EMBEDDING_DIMENSION = 384
+
 # ============================================================
-# LOGGER
+# LOGGER CONFIGURATION
 # ============================================================
 
 logging.basicConfig(
+
     level=logging.INFO,
+
     format="%(asctime)s | %(levelname)s | %(message)s"
+
 )
 
 logger = logging.getLogger(__name__)
+
+# ============================================================
+# START TIMER
+# ============================================================
+
+START_TIME = time.time()
+
+logger.info("=" * 70)
+logger.info("AI SHOPPING ASSISTANT")
+logger.info("Production Embedding Pipeline Started")
+logger.info("=" * 70)
 
 # ============================================================
 # LOAD DATASET
 # ============================================================
 
 def load_dataset(filepath: str) -> pd.DataFrame:
+    """
+    Load shopping products dataset.
+    """
 
-    logger.info("=" * 60)
-    logger.info("Loading Products Dataset")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
+    logger.info("Loading Shopping Dataset")
+    logger.info("=" * 70)
 
     if not os.path.exists(filepath):
 
@@ -76,156 +131,398 @@ def load_dataset(filepath: str) -> pd.DataFrame:
 
     df = pd.read_csv(filepath)
 
-    logger.info(
-        f"Dataset Loaded Successfully : {len(df)} products"
-    )
+    logger.info(f"Dataset Loaded Successfully : {len(df)} products")
 
     return df
+
+
+# ============================================================
+# REQUIRED COLUMNS
+# ============================================================
+
+REQUIRED_COLUMNS = [
+
+    "product_id",
+
+    "product_name",
+
+    "category",
+
+    "sub_category",
+
+    "brand",
+
+    "price",
+
+    "rating",
+
+    "description",
+
+    "features",
+
+    "purpose",
+
+    "image_url",
+
+    "product_url"
+
+]
+
 
 # ============================================================
 # VALIDATE DATASET
 # ============================================================
 
-def validate_dataset(df):
+def validate_dataset(df: pd.DataFrame):
 
-    logger.info("=" * 60)
+    logger.info("=" * 70)
     logger.info("Validating Dataset")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
 
-    required_columns = [
+    missing_columns = [
 
-        "product_id",
-        "product_name",
-        "search_text"
+        column
+
+        for column in REQUIRED_COLUMNS
+
+        if column not in df.columns
 
     ]
 
-    missing = []
-
-    for col in required_columns:
-
-        if col not in df.columns:
-
-            missing.append(col)
-
-    if len(missing) > 0:
+    if missing_columns:
 
         raise Exception(
-            f"Missing Columns : {missing}"
+
+            f"Missing Columns : {missing_columns}"
+
         )
 
     logger.info("Dataset Validation Successful")
+
+
+# ============================================================
+# CLEAN DATASET
+# ============================================================
+
+def clean_dataset(df: pd.DataFrame) -> pd.DataFrame:
+
+    logger.info("=" * 70)
+    logger.info("Cleaning Dataset")
+    logger.info("=" * 70)
+
+    # ---------------------------------------
+    # Remove Duplicate Products
+    # ---------------------------------------
+
+    before = len(df)
+
+    df = df.drop_duplicates(
+
+        subset=[
+
+            "product_name",
+
+            "brand"
+
+        ]
+
+    )
+
+    after = len(df)
+
+    logger.info(
+
+        f"Duplicate Products Removed : {before-after}"
+
+    )
+
+    # ---------------------------------------
+    # Fill Missing Values
+    # ---------------------------------------
+
+    df = df.fillna("")
+
+    # ---------------------------------------
+    # Numeric Columns
+    # ---------------------------------------
+
+    numeric_columns = [
+
+        "price",
+
+        "rating"
+
+    ]
+
+    for column in numeric_columns:
+
+        df[column] = pd.to_numeric(
+
+            df[column],
+
+            errors="coerce"
+
+        )
+
+        df[column] = df[column].fillna(0)
+
+    logger.info("Missing Values Filled")
+
+    logger.info("Dataset Cleaned Successfully")
+
+    return df
+
+
+# ============================================================
+# DATASET SUMMARY
+# ============================================================
+
+def dataset_summary(df: pd.DataFrame):
+
+    logger.info("=" * 70)
+    logger.info("Dataset Summary")
+    logger.info("=" * 70)
+
+    print()
+
+    print("-" * 50)
+
+    print(f"Total Products      : {len(df)}")
+
+    print(f"Categories          : {df['category'].nunique()}")
+
+    print(f"Brands              : {df['brand'].nunique()}")
+
+    print(f"Average Price       : ₹{df['price'].mean():,.2f}")
+
+    print(f"Average Rating      : {df['rating'].mean():.2f}")
+
+    print(f"Minimum Price       : ₹{df['price'].min():,.2f}")
+
+    print(f"Maximum Price       : ₹{df['price'].max():,.2f}")
+
+    print("-" * 50)
+
+    print()
+
+# ============================================================
+# TEXT NORMALIZATION
+# ============================================================
+
+def normalize_text(text: str) -> str:
+    """
+    Normalize text before generating embeddings.
+    """
+
+    if pd.isna(text):
+        return ""
+
+    text = str(text)
+
+    text = text.lower()
+
+    text = text.replace("\n", " ")
+
+    text = text.replace("\t", " ")
+
+    text = " ".join(text.split())
+
+    return text
+
+
+# ============================================================
+# CREATE SEARCH DOCUMENT
+# ============================================================
+
+def create_search_document(row: pd.Series) -> str:
+    """
+    Build a rich semantic search document for each product.
+    """
+
+    document = f"""
+    Product Name : {row.get('product_name','')}
+
+    Category : {row.get('category','')}
+
+    Sub Category : {row.get('sub_category','')}
+
+    Brand : {row.get('brand','')}
+
+    Price : ₹{row.get('price','')}
+
+    Rating : {row.get('rating','')}
+
+    Description : {row.get('description','')}
+
+    Features : {row.get('features','')}
+
+    Purpose : {row.get('purpose','')}
+
+    Color : {row.get('color','')}
+
+    RAM : {row.get('ram','')}
+
+    Storage : {row.get('storage','')}
+
+    Processor : {row.get('processor','')}
+
+    Display : {row.get('display','')}
+
+    Camera : {row.get('camera','')}
+
+    Battery : {row.get('battery','')}
+
+    Warranty : {row.get('warranty','')}
+
+    Seller : {row.get('seller','')}
+    """
+
+    return normalize_text(document)
+
+
+# ============================================================
+# PREPARE SEARCH DOCUMENTS
+# ============================================================
+
+def prepare_documents(df: pd.DataFrame):
+
+    logger.info("=" * 70)
+    logger.info("Preparing Search Documents")
+    logger.info("=" * 70)
+
+    documents = []
+
+    for _, row in tqdm(
+
+        df.iterrows(),
+
+        total=len(df),
+
+        desc="Preparing Documents"
+
+    ):
+
+        documents.append(
+
+            create_search_document(row)
+
+        )
+
+    logger.info(
+
+        f"Total Search Documents : {len(documents)}"
+
+    )
+
+    logger.info("=" * 70)
+
+    logger.info("Sample Search Document")
+
+    logger.info("=" * 70)
+
+    logger.info(documents[0])
+
+    return documents
 
 # ============================================================
 # LOAD EMBEDDING MODEL
 # ============================================================
 
 def load_embedding_model():
+    """
+    Load SentenceTransformer model.
+    """
 
-    logger.info("=" * 60)
-    logger.info("Loading Sentence Transformer")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
+    logger.info("Loading Embedding Model")
+    logger.info("=" * 70)
 
-    model = SentenceTransformer(
-        MODEL_NAME
-    )
+    try:
 
-    logger.info(
-        f"Model Loaded : {MODEL_NAME}"
-    )
+        model = SentenceTransformer(
+            MODEL_NAME
+        )
 
-    return model
+        logger.info(f"Embedding Model Loaded Successfully")
 
-# ============================================================
-# PREPARE SEARCH TEXT
-# ============================================================
+        return model
 
-def prepare_search_text(df):
+    except Exception as e:
 
-    logger.info("=" * 60)
-    logger.info("Preparing Search Text")
-    logger.info("=" * 60)
+        logger.error(f"Error Loading Model : {e}")
 
-    texts = []
+        raise e
 
-    for _, row in df.iterrows():
-
-        text = f"""
-Product Name: {row.get("product_name", "")}
-
-Brand: {row.get("brand", "")}
-
-Main Category: {row.get("main_category", "")}
-
-Sub Category: {row.get("sub_category", "")}
-
-Description: {row.get("description", "")}
-
-Search Keywords: {row.get("search_text", "")}
-
-RAM: {row.get("ram", "")}
-
-Storage: {row.get("storage", "")}
-
-Battery: {row.get("battery", "")}
-
-Processor: {row.get("processor", "")}
-
-Display: {row.get("display", "")}
-"""
-
-        texts.append(text)
-
-    logger.info(
-        f"Prepared {len(texts)} search texts"
-    )
-
-    return texts
 
 # ============================================================
 # GENERATE EMBEDDINGS
 # ============================================================
 
-def generate_embeddings(model, texts):
+def generate_embeddings(
+    model,
+    documents
+):
+    """
+    Generate embeddings using batch processing.
+    """
 
-    logger.info("=" * 60)
+    logger.info("=" * 70)
     logger.info("Generating Embeddings")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
 
     all_embeddings = []
 
     total_batches = (
-        len(texts) + BATCH_SIZE - 1
+
+        len(documents)
+
+        + BATCH_SIZE
+
+        - 1
+
     ) // BATCH_SIZE
 
-    logger.info(
-        f"Total Batches : {total_batches}"
-    )
+    logger.info(f"Total Documents : {len(documents)}")
+    logger.info(f"Batch Size : {BATCH_SIZE}")
+    logger.info(f"Total Batches : {total_batches}")
 
-    for i in tqdm(
+    for start in tqdm(
 
-        range(0, len(texts), BATCH_SIZE),
+        range(
 
-        desc="Embedding Products"
+            0,
+
+            len(documents),
+
+            BATCH_SIZE
+
+        ),
+
+        desc="Generating Embeddings"
 
     ):
 
-        batch = texts[i:i + BATCH_SIZE]
+        batch = documents[
+            start:
+            start + BATCH_SIZE
+        ]
 
-        embeddings = model.encode(
+        batch_embeddings = model.encode(
 
             batch,
 
+            batch_size=BATCH_SIZE,
+
             convert_to_numpy=True,
 
-            show_progress_bar=False,
+            normalize_embeddings=True,
 
-            normalize_embeddings=False
+            show_progress_bar=False
 
         )
 
         all_embeddings.append(
-            embeddings
+            batch_embeddings
         )
 
     embeddings = np.vstack(
@@ -236,38 +533,49 @@ def generate_embeddings(model, texts):
         f"Embedding Shape : {embeddings.shape}"
     )
 
-    return embeddings
+    return embeddings.astype(np.float32)
 
 
 # ============================================================
-# NORMALIZE EMBEDDINGS
+# VALIDATE EMBEDDINGS
 # ============================================================
 
-def normalize_embeddings(embeddings):
+def validate_embeddings(
+    embeddings
+):
+    """
+    Validate generated embeddings.
+    """
 
-    logger.info("=" * 60)
-    logger.info("Normalizing Embeddings")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
+    logger.info("Validating Embeddings")
+    logger.info("=" * 70)
 
-    norms = np.linalg.norm(
+    if embeddings is None:
 
-        embeddings,
+        raise Exception(
+            "Embeddings are None."
+        )
 
-        axis=1,
+    if len(embeddings) == 0:
 
-        keepdims=True
+        raise Exception(
+            "No embeddings generated."
+        )
 
-    )
+    if embeddings.shape[1] != EMBEDDING_DIMENSION:
 
-    norms[norms == 0] = 1
+        raise Exception(
 
-    embeddings = embeddings / norms
+            f"""
+Expected Dimension : {EMBEDDING_DIMENSION}
 
-    logger.info(
-        "Embeddings Normalized Successfully"
-    )
+Found : {embeddings.shape[1]}
+"""
 
-    return embeddings
+        )
+
+    logger.info("Embedding Validation Successful")
 
 
 # ============================================================
@@ -275,260 +583,207 @@ def normalize_embeddings(embeddings):
 # ============================================================
 
 def embedding_summary(df, embeddings):
+    """
+    Print embedding summary.
+    """
 
-    logger.info("=" * 60)
+    logger.info("=" * 70)
     logger.info("Embedding Summary")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
 
     print()
 
-    print("Products :", len(df))
-
-    print("Embedding Dimension :", embeddings.shape[1])
-
-    print("Embedding Matrix :", embeddings.shape)
+    print("-" * 60)
+    print(f"Products Indexed     : {len(df)}")
+    print(f"Embedding Shape      : {embeddings.shape}")
+    print(f"Embedding Dimension  : {embeddings.shape[1]}")
+    print(f"Embedding Data Type  : {embeddings.dtype}")
+    print("-" * 60)
 
     print()
 
-
 # ============================================================
-# CREATE PRODUCT MAPPING
-# ============================================================
-
-# ============================================================
-# CREATE PRODUCT MAPPING
+# CREATE FAISS INDEX
 # ============================================================
 
-def create_product_mapping(df):
+def create_faiss_index(embeddings):
+    """
+    Create FAISS Index using cosine similarity.
+    """
 
-    logger.info("=" * 60)
-    logger.info("Creating Product Mapping")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
+    logger.info("Creating FAISS Index")
+    logger.info("=" * 70)
 
-    mapping = {}
+    dimension = embeddings.shape[1]
 
-    for idx, row in df.iterrows():
+    index = faiss.IndexFlatIP(dimension)
 
-        mapping[idx] = {
+    index.add(embeddings)
 
-            # -----------------------------
-            # Product Information
-            # -----------------------------
-            "product_id": str(row.get("product_id", "")),
-            "product_name": str(row.get("product_name", "Unknown")),
-            "brand": str(row.get("brand", "Unknown")),
+    logger.info(f"Indexed Products : {index.ntotal}")
 
-            # -----------------------------
-            # Categories
-            # -----------------------------
-            "main_category": str(row.get("main_category", "Unknown")),
-            "sub_category": str(row.get("sub_category", "Unknown")),
+    return index
 
-            # -----------------------------
-            # Pricing
-            # -----------------------------
-            "price": float(row.get("price", 0.0))
-                     if pd.notna(row.get("price")) else 0.0,
-
-            "original_price": float(row.get("original_price", 0.0))
-                     if pd.notna(row.get("original_price")) else 0.0,
-
-            "discount_percent": float(row.get("discount_percent", 0.0))
-                     if pd.notna(row.get("discount_percent")) else 0.0,
-
-            # -----------------------------
-            # Ratings
-            # -----------------------------
-            "rating": float(row.get("rating", 0.0))
-                     if pd.notna(row.get("rating")) else 0.0,
-
-            "rating_count": int(row.get("rating_count", 0))
-                     if pd.notna(row.get("rating_count")) else 0,
-
-            # -----------------------------
-            # Description
-            # -----------------------------
-            "description": str(
-                    row.get(
-                        "description",
-                        "No Description Available"
-                    )
-                ),
-
-            # -----------------------------
-            # Specifications
-            # -----------------------------
-            "ram": str(row.get("ram", "Unknown")),
-            "storage": str(row.get("storage", "Unknown")),
-            "battery": str(row.get("battery", "Unknown")),
-            "display": str(row.get("display", "Unknown")),
-            "processor": str(row.get("processor", "Unknown")),
-            "warranty": str(row.get("warranty", "Unknown")),
-
-            # -----------------------------
-            # URLs
-            # -----------------------------
-            "image_url": str(row.get("image_url", "Unknown")),
-            "product_url": str(row.get("product_url", "Unknown")),
-
-            # -----------------------------
-            # Search Text
-            # -----------------------------
-
-            "search_text": str(
-                row.get("search_text", "")
-            ),
-
-            "embedding_text": str(
-                row.get("search_text", "")
-            )
-
-        }
-
-    logger.info(
-        f"Product Mapping Created : {len(mapping)} products"
-    )
-
-    return mapping
 
 # ============================================================
-# SAVE EMBEDDINGS
+# SAVE FILES
 # ============================================================
 
 def save_embeddings(embeddings):
 
-    logger.info("=" * 60)
-    logger.info("Saving Embeddings")
-    logger.info("=" * 60)
+    np.save(EMBEDDINGS_FILE, embeddings)
 
-    output_dir = os.path.dirname(OUTPUT_EMBEDDINGS)
+    logger.info(f"Embeddings Saved : {EMBEDDINGS_FILE}")
 
-    os.makedirs(output_dir, exist_ok=True)
 
-    np.save(
-        OUTPUT_EMBEDDINGS,
-        embeddings
-    )
+def save_faiss_index(index):
+
+    faiss.write_index(index, FAISS_INDEX_FILE)
+
+    logger.info(f"FAISS Index Saved : {FAISS_INDEX_FILE}")
+
+
+def save_product_mapping(df):
+
+    mapping = df.to_dict("records")
+
+    with open(PRODUCT_MAPPING_FILE, "wb") as f:
+
+        pickle.dump(mapping, f)
 
     logger.info(
-        f"Embeddings Saved : {OUTPUT_EMBEDDINGS}"
+        f"Product Mapping Saved : {PRODUCT_MAPPING_FILE}"
     )
 
 
-# ============================================================
-# SAVE PRODUCT MAPPING
-# ============================================================
+def save_metadata(df, embeddings):
 
-def save_product_mapping(mapping):
+    metadata = {
 
-    logger.info("=" * 60)
-    logger.info("Saving Product Mapping")
-    logger.info("=" * 60)
+        "total_products": len(df),
 
-    output_dir = os.path.dirname(OUTPUT_MAPPING)
+        "embedding_dimension": embeddings.shape[1],
 
-    os.makedirs(output_dir, exist_ok=True)
+        "embedding_model": MODEL_NAME,
 
-    with open(
-        OUTPUT_MAPPING,
-        "wb"
-    ) as file:
+        "batch_size": BATCH_SIZE,
 
-        pickle.dump(
-            mapping,
-            file
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
+
+    }
+
+    with open(METADATA_FILE, "w") as f:
+
+        json.dump(
+            metadata,
+            f,
+            indent=4
         )
 
-    logger.info(
-        f"Mapping Saved : {OUTPUT_MAPPING}"
-    )
+    logger.info(f"Metadata Saved : {METADATA_FILE}")
 
 
 # ============================================================
-# MAIN
+# MAIN PIPELINE
 # ============================================================
 
 def main():
 
-    logger.info("=" * 60)
-    logger.info("EMBEDDING PIPELINE STARTED")
-    logger.info("=" * 60)
+    try:
 
-    # ------------------------------------
-    # Load Dataset
-    # ------------------------------------
+        logger.info("=" * 70)
+        logger.info("STARTING EMBEDDING PIPELINE")
+        logger.info("=" * 70)
 
-    df = load_dataset(INPUT_FILE)
+        # Load Dataset
+        df = load_dataset(DATASET_PATH)
 
-    validate_dataset(df)
+        validate_dataset(df)
 
-    # ------------------------------------
-    # Prepare Search Text
-    # ------------------------------------
+        df = clean_dataset(df)
 
-    texts = prepare_search_text(df)
+        dataset_summary(df)
 
-    # ------------------------------------
-    # Load Model
-    # ------------------------------------
+        # Create Search Documents
+        documents = prepare_documents(df)
 
-    model = load_embedding_model()
+        # Load Model
+        model = load_embedding_model()
 
-    # ------------------------------------
-    # Generate Embeddings
-    # ------------------------------------
+        # Generate Embeddings
+        embeddings = generate_embeddings(
+            model,
+            documents
+        )
 
-    embeddings = generate_embeddings(
-        model,
-        texts
-    )
+        validate_embeddings(
+            embeddings
+        )
 
-    # ------------------------------------
-    # Normalize Embeddings
-    # ------------------------------------
+        embedding_summary(
+            df,
+            embeddings
+        )
 
-    embeddings = normalize_embeddings(
-        embeddings
-    )
+        # Create FAISS
+        index = create_faiss_index(
+            embeddings
+        )
 
-    # ------------------------------------
-    # Summary
-    # ------------------------------------
+        # Save Files
+        save_embeddings(
+            embeddings
+        )
 
-    embedding_summary(
-        df,
-        embeddings
-    )
+        save_faiss_index(
+            index
+        )
 
-    # ------------------------------------
-    # Product Mapping
-    # ------------------------------------
+        save_product_mapping(
+            df
+        )
 
-    mapping = create_product_mapping(
-        df
-    )
+        save_metadata(
+            df,
+            embeddings
+        )
 
-    # ------------------------------------
-    # Save Outputs
-    # ------------------------------------
+        elapsed = time.time() - START_TIME
 
-    save_embeddings(
-        embeddings
-    )
+        logger.info("=" * 70)
+        logger.info("EMBEDDING PIPELINE COMPLETED SUCCESSFULLY")
+        logger.info("=" * 70)
 
-    save_product_mapping(
-        mapping
-    )
+        print()
 
-    logger.info("=" * 60)
-    logger.info("EMBEDDING PIPELINE COMPLETED")
-    logger.info("=" * 60)
+        print("=" * 60)
 
-    print("\nEmbeddings Generated Successfully!")
+        print("Embedding Generation Completed Successfully!")
 
-    print(f"\nEmbeddings : {OUTPUT_EMBEDDINGS}")
+        print("=" * 60)
 
-    print(f"Product Mapping : {OUTPUT_MAPPING}")
+        print(f"Products Indexed     : {len(df)}")
+
+        print(f"Embeddings File      : {EMBEDDINGS_FILE}")
+
+        print(f"FAISS Index          : {FAISS_INDEX_FILE}")
+
+        print(f"Product Mapping      : {PRODUCT_MAPPING_FILE}")
+
+        print(f"Metadata             : {METADATA_FILE}")
+
+        print(f"Execution Time       : {elapsed:.2f} sec")
+
+        print("=" * 60)
+
+        print()
+
+    except Exception as e:
+
+        logger.exception("Embedding Pipeline Failed")
+
+        print(f"\nError : {e}")
 
 
 # ============================================================
@@ -536,4 +791,5 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
+
     main()

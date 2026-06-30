@@ -1,0 +1,7 @@
+{
+    "total_products": 317,
+    "embedding_dimension": 384,
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "batch_size": 64,
+    "created_at": "2026-06-30 11:51:28"
+}
